@@ -1,0 +1,1015 @@
+
+User 1:52 PM
+TARGET SYSTEM SPECIFICATION: VocalRefine AI
+1. Project Overview & Architecture
+Build a full-stack web application called "VocalRefine AI" that empowers speakers to analyze their communication flaws (specifically filler words, pacing, and hesitancy) and hear a re-synthesized, flawless version of their speech generated in their own cloned voice.
+Tech Stack Specifications:
+Frontend: React (Vite, TypeScript), Tailwind CSS, Lucide React icons.
+Backend: Node.js, Express, TypeScript.
+APIs:
+Fish Audio API: Custom Voice Model Training (/v1/model) and High-Fidelity Text-to-Speech (/v1/tts).
+Google Gemini API (gemini-1.5-pro): Multimodal Audio Analysis, Filler Extraction, and Jordan Peterson-style Communication Coaching & Screenplay Refinement.
+Audio Processing: Backend fluent-ffmpeg for normalizing audio buffers, converting format encodings, and preparing training audio slices.
+2. End-to-End User & System Workflow
+Step 1: Voice Calibration & Model Training (Post-Processing Setup)
+User records a 30-60 second baseline reading or uploads a clean voice sample.
+Backend receives the audio file, uses fluent-ffmpeg to convert it to standard .wav (16kHz, mono), and uploads it to Fish Audio API to train/create a custom Voice Model ID.
+Save the returned model_id in session storage or state for downstream TTS synthesis.
+Step 2: Speech Recording & Communication Audit
+User records their raw spoken thought, narrative, or speech (with natural fillers like "um", "like", "you know", "basically").
+Backend passes the raw audio to Google Gemini 1.5 Pro.
+Gemini performs audio-level and lexical analysis, returning a strict JSON response containing:
+Filler Density Index (%) and exact filler frequency counts.
+Raw Transcript vs. Refined "Flawless" Script (with zero fillers, polished transitions, and [pause] indicators).
+"Peterson Audit": Unapologetic, constructive feedback analyzing where the speaker lacks conviction or hides behind verbal crutches.
+Screenplay/Dialogue Adaptation: Formatted screenplay script extending their idea into a structured conversation.
+Step 3: Fresh Voice Re-Synthesis
+Frontend displays analysis metrics and the Refined Script.
+User clicks "Re-Synthesize in My Refined Voice".
+Backend takes the clean, polished script and calls Fish Audio TTS API using the user's cloned model_id created in Step 1.
+An entirely fresh, clear audio track is generated and returned to the client for playback side-by-side with the original recording.
+3. Detailed API & JSON Schemas
+Gemini Analysis System Prompt & Schema
+code
+JSON
+{
+  "metrics": {
+    "wordCount": 245,
+    "fillerCount": 14,
+    "fillerPercentage": 5.71,
+    "pacingWPM": 138,
+    "clarityScore": 72
+  },
+  "fillerBreakdown": [
+    { "word": "like", "count": 6 },
+    { "word": "um", "count": 5 },
+    { "word": "you know", "count": 3 }
+  ],
+  "rawTranscript": "So, um, basically what I was thinking is that, like, our product needs to, you know, scale quickly.",
+  "refinedScript": "Our product must scale rapidly. To achieve this, we need to focus directly on our core market.",
+  "petersonAudit": "Notice how you hid behind 'basically' and 'you know'. You uttered those because you were terrified of the silence between your ideas. Stand firmly behind your proposition.",
+  "screenplayVersion": "PROTAGONIST\n(looking directly ahead)\nOur product must scale rapidly. We can no longer afford hesitation."
+}
+Model 1:52 PM
+Here is a complete, production-ready full-stack implementation of VocalRefine AI.
+Project Architecture
+code
+Text
+vocalrefine-ai/
+├── backend/
+│   ├── src/
+│   │   ├── services/
+│   │   │   ├── ffmpegService.ts
+│   │   │   ├── fishAudioService.ts
+│   │   │   └── geminiService.ts
+│   │   └── server.ts
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── .env.example
+└── frontend/
+    ├── src/
+    │   ├── components/
+    │   │   ├── AudioRecorder.tsx
+    │   │   ├── MetricCards.tsx
+    │   │   ├── PetersonAuditCard.tsx
+    │   │   └── ScreenplayModal.tsx
+    │   ├── App.tsx
+    │   ├── types.ts
+    │   └── main.tsx
+    ├── package.json
+    ├── tailwind.config.js
+    └── tsconfig.json
+1. Backend Implementation
+backend/package.json
+code
+JSON
+{
+  "name": "vocalrefine-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^0.1.1",
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "form-data": "^4.0.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/fluent-ffmpeg": "^2.1.26",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.5.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4"
+  }
+}
+backend/tsconfig.json
+code
+JSON
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"]
+}
+backend/.env.example
+code
+Env
+PORT=5000
+FISH_AUDIO_API_KEY=your_fish_audio_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+backend/src/services/ffmpegService.ts
+Converts arbitrary audio buffers (e.g., browser-recorded .webm or .ogg) into 16 kHz mono .wav normalized for clean acoustic inference and cloning.
+code
+TypeScript
+import ffmpeg from 'fluent-ffmpeg';
+import { Readable, PassThrough } from 'stream';
+
+export async function normalizeTo16kHzMonoWav(inputBuffer: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const inputStream = new Readable();
+    inputStream.push(inputBuffer);
+    inputStream.push(null);
+
+    const outputStream = new PassThrough();
+    const chunks: Buffer[] = [];
+
+    outputStream.on('data', (chunk) => chunks.push(chunk));
+    outputStream.on('end', () => resolve(Buffer.concat(chunks)));
+    outputStream.on('error', (err) => reject(err));
+
+    ffmpeg(inputStream)
+      .toFormat('wav')
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .audioCodec('pcm_s16le')
+      .on('error', (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
+      .pipe(outputStream);
+  });
+}
+backend/src/services/fishAudioService.ts
+Handles voice calibration/model creation (POST /model) and synthesis (POST /v1/tts) with the user's reference_id[1][2].
+code
+TypeScript
+import axios from 'axios';
+import FormData from 'form-data';
+
+const FISH_BASE_URL = 'https://api.fish.audio';
+
+export async function trainVoiceModel(audioBuffer: Buffer, title: string = 'UserVoiceModel'): Promise<string> {
+  const apiKey = process.env.FISH_AUDIO_API_KEY;
+  if (!apiKey) throw new Error('FISH_AUDIO_API_KEY is not defined in environment variables.');
+
+  const form = new FormData();
+  form.append('type', 'tts');
+  form.append('title', `${title}_${Date.now()}`);
+  form.append('train_mode', 'fast');
+  form.append('visibility', 'private');
+  form.append('voices', audioBuffer, {
+    filename: 'calibration.wav',
+    contentType: 'audio/wav',
+  });
+
+  const response = await axios.post(`${FISH_BASE_URL}/model`, form, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      ...form.getHeaders(),
+    },
+  });
+
+  const modelId = response.data?._id || response.data?.id;
+  if (!modelId) {
+    throw new Error(`Failed to extract model_id from Fish Audio: ${JSON.stringify(response.data)}`);
+  }
+  return modelId;
+}
+
+export async function synthesizeFlawlessSpeech(text: string, referenceId: string): Promise<Buffer> {
+  const apiKey = process.env.FISH_AUDIO_API_KEY;
+  if (!apiKey) throw new Error('FISH_AUDIO_API_KEY is not defined in environment variables.');
+
+  // S2.1-Pro supports natural language bracket annotations like [pause]
+  const response = await axios.post(
+    `${FISH_BASE_URL}/v1/tts`,
+    {
+      text: text,
+      reference_id: referenceId,
+      format: 'mp3',
+      normalize: true,
+      latency: 'balanced',
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        model: 's2.1-pro',
+      },
+      responseType: 'arraybuffer',
+    }
+  );
+
+  return Buffer.from(response.data);
+}
+backend/src/services/geminiService.ts
+Performs multimodal audio ingestion, metric quantification, Peterson audit generation, and screenplay script generation using the @google/genai SDK and gemini-1.5-pro.
+code
+TypeScript
+import { GoogleGenAI, Type, Schema } from '@google/genai';
+
+export interface AuditResult {
+  metrics: {
+    wordCount: number;
+    fillerCount: number;
+    fillerPercentage: number;
+    pacingWPM: number;
+    clarityScore: number;
+  };
+  fillerBreakdown: Array<{ word: string; count: number }>;
+  rawTranscript: string;
+  refinedScript: string;
+  petersonAudit: string;
+  screenplayVersion: string;
+}
+
+const auditResponseSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    metrics: {
+      type: Type.OBJECT,
+      properties: {
+        wordCount: { type: Type.INTEGER },
+        fillerCount: { type: Type.INTEGER },
+        fillerPercentage: { type: Type.NUMBER },
+        pacingWPM: { type: Type.INTEGER },
+        clarityScore: { type: Type.INTEGER },
+      },
+      required: ['wordCount', 'fillerCount', 'fillerPercentage', 'pacingWPM', 'clarityScore'],
+    },
+    fillerBreakdown: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          word: { type: Type.STRING },
+          count: { type: Type.INTEGER },
+        },
+        required: ['word', 'count'],
+      },
+    },
+    rawTranscript: { type: Type.STRING },
+    refinedScript: { type: Type.STRING },
+    petersonAudit: { type: Type.STRING },
+    screenplayVersion: { type: Type.STRING },
+  },
+  required: [
+    'metrics',
+    'fillerBreakdown',
+    'rawTranscript',
+    'refinedScript',
+    'petersonAudit',
+    'screenplayVersion',
+  ],
+};
+
+export async function analyzeAudioWithGemini(audioBuffer: Buffer, mimeType: string = 'audio/wav'): Promise<AuditResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not defined in environment variables.');
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const systemInstruction = `
+You are VocalRefine AI, an elite multimodal speech coach and vocal dramatist combining exacting linguistic precision with Jordan Peterson's uncompromising rhetorical diagnosis.
+
+Analyze the uploaded speech audio:
+1. Transcribe the raw speech verbatim, capturing every stutter, false start, and verbal crutch ("um", "uh", "like", "basically", "you know", "kind of").
+2. Calculate exact metrics: word count, total filler count, filler percentage, approximate words-per-minute (pacingWPM), and an overall communication clarity score (0-100).
+3. Generate a refined, flawless script: eliminate verbal static, elevate precision, and insert bracket cues such as [pause] where deliberate cadence is required.
+4. Provide the "Peterson Audit": Unapologetic, constructive rhetorical feedback analyzing where the speaker lacks conviction, retreats into defensive vagueness, or abdicates intellectual authority.
+5. Create a Screenplay Adaptation: Format the refined message into a crisp screenplay scene with scene headings, character names, and parentheticals.
+Return output strictly conforming to the requested JSON schema.
+`;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-1.5-pro',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              data: audioBuffer.toString('base64'),
+              mimeType: mimeType,
+            },
+          },
+          {
+            text: 'Analyze this spoken audio recording according to the system instructions and output valid JSON.',
+          },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction,
+      responseMimeType: 'application/json',
+      responseSchema: auditResponseSchema,
+      temperature: 0.2,
+    },
+  });
+
+  if (!response.text) {
+    throw new Error('Gemini returned an empty response.');
+  }
+
+  return JSON.parse(response.text) as AuditResult;
+}
+backend/src/server.ts
+Express API routing with file uploads handled via multer.
+code
+TypeScript
+import express, { Request, Response } from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import dotenv from 'dotenv';
+import { normalizeTo16kHzMonoWav } from './services/ffmpegService.js';
+import { trainVoiceModel, synthesizeFlawlessSpeech } from './services/fishAudioService.js';
+import { analyzeAudioWithGemini } from './services/geminiService.js';
+
+dotenv.config();
+
+const app = express();
+const port = process.env.PORT || 5000;
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+app.use(cors());
+app.use(express.json());
+
+// Step 1: Voice Calibration & Model Training
+app.post('/api/calibrate-voice', upload.single('audio'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required.' });
+    }
+
+    const normalizedWav = await normalizeTo16kHzMonoWav(req.file.buffer);
+    const modelId = await trainVoiceModel(normalizedWav, 'UserSpeaker');
+
+    return res.status(200).json({
+      success: true,
+      modelId,
+      message: 'Voice clone model trained and registered successfully.',
+    });
+  } catch (error: any) {
+    console.error('Calibration error:', error);
+    return res.status(500).json({ error: error.message || 'Voice calibration failed.' });
+  }
+});
+
+// Step 2: Speech Recording & Communication Audit
+app.post('/api/audit-speech', upload.single('audio'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required.' });
+    }
+
+    const normalizedWav = await normalizeTo16kHzMonoWav(req.file.buffer);
+    const auditData = await analyzeAudioWithGemini(normalizedWav, 'audio/wav');
+
+    return res.status(200).json({
+      success: true,
+      audit: auditData,
+    });
+  } catch (error: any) {
+    console.error('Audit error:', error);
+    return res.status(500).json({ error: error.message || 'Speech audit failed.' });
+  }
+});
+
+// Step 3: Fresh Voice Re-Synthesis
+app.post('/api/resynthesize', async (req: Request, res: Response) => {
+  try {
+    const { script, modelId } = req.body;
+    if (!script || !modelId) {
+      return res.status(400).json({ error: 'Missing required fields: script and modelId.' });
+    }
+
+    const audioBuffer = await synthesizeFlawlessSpeech(script, modelId);
+
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.length,
+      'Content-Disposition': 'attachment; filename="refined_voice.mp3"',
+    });
+
+    return res.status(200).send(audioBuffer);
+  } catch (error: any) {
+    console.error('Re-synthesis error:', error);
+    return res.status(500).json({ error: error.message || 'Speech re-synthesis failed.' });
+  }
+});
+
+app.listen(port, () => {
+  console.log(`VocalRefine AI backend operational on port ${port}`);
+});
+2. Frontend Implementation
+frontend/src/types.ts
+code
+TypeScript
+export interface FillerItem {
+  word: string;
+  count: number;
+}
+
+export interface SpeechMetrics {
+  wordCount: number;
+  fillerCount: number;
+  fillerPercentage: number;
+  pacingWPM: number;
+  clarityScore: number;
+}
+
+export interface AuditResult {
+  metrics: SpeechMetrics;
+  fillerBreakdown: FillerItem[];
+  rawTranscript: string;
+  refinedScript: string;
+  petersonAudit: string;
+  screenplayVersion: string;
+}
+frontend/src/components/AudioRecorder.tsx
+Handles browser-level microphone recording with active duration tracking and waveform animation.
+code
+Tsx
+import React, { useState, useRef, useEffect } from 'react';
+import { Mic, Square, UploadCloud, RefreshCw } from 'lucide-react';
+
+interface AudioRecorderProps {
+  onAudioReady: (blob: Blob) => void;
+  title: string;
+  subtitle: string;
+  minDurationSeconds?: number;
+}
+
+export const AudioRecorder: React.FC<AudioRecorderProps> = ({
+  onAudioReady,
+  title,
+  subtitle,
+  minDurationSeconds = 1,
+}) => {
+  const [recording, setRecording] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [hasRecorded, setHasRecorded] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        onAudioReady(audioBlob);
+        setHasRecorded(true);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorderRef.current.start();
+      setRecording(true);
+      setDuration(0);
+
+      timerRef.current = setInterval(() => {
+        setDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      alert('Microphone access denied or unavailable.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && recording) {
+      if (duration < minDurationSeconds) {
+        alert(`Recording must be at least ${minDurationSeconds} seconds.`);
+        return;
+      }
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onAudioReady(file);
+      setHasRecorded(true);
+    }
+  };
+
+  const formatTime = (secs: number) => {
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    return `${mins}:${remSecs < 10 ? '0' : ''}${remSecs}`;
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col items-center">
+      <h3 className="text-lg font-bold text-slate-100">{title}</h3>
+      <p className="text-xs text-slate-400 text-center mt-1 mb-6">{subtitle}</p>
+
+      {/* Pulsing indicator */}
+      <div className="relative mb-6">
+        {recording && (
+          <span className="absolute -inset-2 rounded-full bg-rose-500/30 animate-ping"></span>
+        )}
+        <div
+          className={`w-24 h-24 rounded-full flex items-center justify-center border-2 transition-all ${
+            recording
+              ? 'bg-rose-950/40 border-rose-500 text-rose-400'
+              : 'bg-slate-800/80 border-slate-700 text-slate-300'
+          }`}
+        >
+          {recording ? (
+            <div className="flex flex-col items-center">
+              <span className="font-mono text-sm">{formatTime(duration)}</span>
+              <span className="text-[10px] uppercase font-bold tracking-widest text-rose-400 mt-1">REC</span>
+            </div>
+          ) : (
+            <Mic className="w-8 h-8 text-indigo-400" />
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 w-full max-w-xs">
+        {!recording ? (
+          <button
+            onClick={startRecording}
+            className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm flex items-center justify-center gap-2 transition"
+          >
+            <Mic className="w-4 h-4" /> Record Mic
+          </button>
+        ) : (
+          <button
+            onClick={stopRecording}
+            className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-medium text-sm flex items-center justify-center gap-2 transition"
+          >
+            <Square className="w-4 h-4" /> Stop Recording
+          </button>
+        )}
+
+        <label className="flex items-center justify-center p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer transition">
+          <UploadCloud className="w-4 h-4" />
+          <input type="file" accept="audio/*" onChange={handleFileUpload} className="hidden" />
+        </label>
+      </div>
+
+      {hasRecorded && (
+        <span className="text-xs text-emerald-400 font-medium flex items-center gap-1 mt-4">
+          <RefreshCw className="w-3 h-3" /> Audio sample captured & ready
+        </span>
+      )}
+    </div>
+  );
+};
+frontend/src/components/MetricCards.tsx
+code
+Tsx
+import React from 'react';
+import { SpeechMetrics, FillerItem } from '../types';
+import { Activity, Gauge, Zap, AlertTriangle } from 'lucide-react';
+
+interface MetricCardsProps {
+  metrics: SpeechMetrics;
+  fillerBreakdown: FillerItem[];
+}
+
+export const MetricCards: React.FC<MetricCardsProps> = ({ metrics, fillerBreakdown }) => {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
+        <div className="flex justify-between items-start">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Clarity Index</span>
+          <Zap className="w-4 h-4 text-emerald-400" />
+        </div>
+        <div className="mt-4">
+          <span className="text-3xl font-extrabold text-white">{metrics.clarityScore}</span>
+          <span className="text-slate-500 text-sm"> / 100</span>
+        </div>
+        <div className="w-full bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
+          <div
+            className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+            style={{ width: `${metrics.clarityScore}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
+        <div className="flex justify-between items-start">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Filler Density</span>
+          <AlertTriangle className="w-4 h-4 text-rose-400" />
+        </div>
+        <div className="mt-4">
+          <span className="text-3xl font-extrabold text-white">{metrics.fillerPercentage.toFixed(1)}%</span>
+          <span className="text-slate-500 text-xs ml-2">({metrics.fillerCount} fillers)</span>
+        </div>
+        <div className="flex gap-1 mt-3 flex-wrap">
+          {fillerBreakdown.slice(0, 3).map((f) => (
+            <span key={f.word} className="text-[10px] bg-rose-950/60 text-rose-300 border border-rose-900 px-1.5 py-0.5 rounded">
+              "{f.word}": {f.count}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
+        <div className="flex justify-between items-start">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Pacing (WPM)</span>
+          <Gauge className="w-4 h-4 text-sky-400" />
+        </div>
+        <div className="mt-4">
+          <span className="text-3xl font-extrabold text-white">{metrics.pacingWPM}</span>
+          <span className="text-slate-500 text-xs ml-1">words/min</span>
+        </div>
+        <span className="text-[11px] text-slate-400 mt-3">
+          {metrics.pacingWPM >= 130 && metrics.pacingWPM <= 160 ? 'Optimal Cadence' : 'Cadence Adjustment Needed'}
+        </span>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between">
+        <div className="flex justify-between items-start">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Word Count</span>
+          <Activity className="w-4 h-4 text-purple-400" />
+        </div>
+        <div className="mt-4">
+          <span className="text-3xl font-extrabold text-white">{metrics.wordCount}</span>
+          <span className="text-slate-500 text-xs ml-1">total tokens</span>
+        </div>
+        <span className="text-[11px] text-slate-400 mt-3">
+          Verbal Efficiency: {((1 - metrics.fillerCount / (metrics.wordCount || 1)) * 100).toFixed(0)}%
+        </span>
+      </div>
+    </div>
+  );
+};
+frontend/src/components/PetersonAuditCard.tsx
+Renders Jordan Peterson's constructive rhetorical analysis.
+code
+Tsx
+import React from 'react';
+import { Flame } from 'lucide-react';
+
+interface PetersonAuditCardProps {
+  auditText: string;
+}
+
+export const PetersonAuditCard: React.FC<PetersonAuditCardProps> = ({ auditText }) => {
+  return (
+    <div className="bg-gradient-to-br from-amber-950/20 via-slate-900 to-slate-900 border border-amber-900/40 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="p-2 bg-amber-500/10 rounded-lg text-amber-400">
+          <Flame className="w-5 h-5" />
+        </div>
+        <div>
+          <h4 className="text-amber-200 font-bold text-base tracking-wide">Rhetorical Conviction Audit</h4>
+          <p className="text-[11px] text-amber-400/80 uppercase font-mono tracking-widest">Unfiltered Diagnostics</p>
+        </div>
+      </div>
+      <p className="text-slate-300 leading-relaxed text-sm italic font-serif mt-2 pl-4 border-l-2 border-amber-500/50">
+        "{auditText}"
+      </p>
+    </div>
+  );
+};
+frontend/src/components/ScreenplayModal.tsx
+code
+Tsx
+import React from 'react';
+import { Film, X } from 'lucide-react';
+
+interface ScreenplayModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  screenplayText: string;
+}
+
+export const ScreenplayModal: React.FC<ScreenplayModalProps> = ({ isOpen, onClose, screenplayText }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-950 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl flex flex-col max-h-[85vh]">
+        <div className="flex justify-between items-center pb-4 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <Film className="w-5 h-5 text-indigo-400" />
+            <h3 className="text-slate-200 font-bold">Screenplay / Dialogue Adaptation</h3>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto mt-4 p-4 bg-slate-900 rounded-xl font-mono text-xs text-slate-300 whitespace-pre-wrap leading-relaxed border border-slate-800/80">
+          {screenplayText}
+        </div>
+      </div>
+    </div>
+  );
+};
+frontend/src/App.tsx
+Orchestrates the 3-step pipeline: Calibration, Audit, and Voice Re-Synthesis.
+code
+Tsx
+import React, { useState } from 'react';
+import axios from 'axios';
+import { AudioRecorder } from './components/AudioRecorder';
+import { MetricCards } from './components/MetricCards';
+import { PetersonAuditCard } from './components/PetersonAuditCard';
+import { ScreenplayModal } from './components/ScreenplayModal';
+import { AuditResult } from './types';
+import { Sparkles, Play, CheckCircle2, Volume2, ShieldAlert, FileText } from 'lucide-react';
+
+const API_BASE = 'http://localhost:5000/api';
+
+export const App: React.FC = () => {
+  // Step 1 State: Calibration
+  const [modelId, setModelId] = useState<string | null>(null);
+  const [isCalibrating, setIsCalibrating] = useState(false);
+
+  // Step 2 State: Audit
+  const [auditData, setAuditData] = useState<AuditResult | null>(null);
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [rawAudioUrl, setRawAudioUrl] = useState<string | null>(null);
+
+  // Step 3 State: Re-Synthesis
+  const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [synthesizedAudioUrl, setSynthesizedAudioUrl] = useState<string | null>(null);
+
+  // Modal State
+  const [isScreenplayOpen, setIsScreenplayOpen] = useState(false);
+
+  // Step 1: Submit Calibration Voice
+  const handleCalibrationAudio = async (blob: Blob) => {
+    setIsCalibrating(true);
+    try {
+      const formData = new FormData();
+      formData.append('audio', blob, 'calibration.webm');
+
+      const response = await axios.post(`${API_BASE}/calibrate-voice`, formData);
+      setModelId(response.data.modelId);
+    } catch (err: any) {
+      alert(`Calibration failed: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsCalibrating(false);
+    }
+  };
+
+  // Step 2: Submit Speech for Analysis
+  const handleSpeechAudio = async (blob: Blob) => {
+    setIsAuditing(true);
+    setRawAudioUrl(URL.createObjectURL(blob));
+    setSynthesizedAudioUrl(null);
+    try {
+      const formData = new FormData();
+      formData.append('audio', blob, 'speech.webm');
+
+      const response = await axios.post(`${API_BASE}/audit-speech`, formData);
+      setAuditData(response.data.audit);
+    } catch (err: any) {
+      alert(`Audit failed: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
+  // Step 3: Trigger Voice Re-Synthesis
+  const handleReSynthesize = async () => {
+    if (!auditData?.refinedScript || !modelId) return;
+
+    setIsSynthesizing(true);
+    try {
+      const response = await axios.post(
+        `${API_BASE}/resynthesize`,
+        {
+          script: auditData.refinedScript,
+          modelId: modelId,
+        },
+        { responseType: 'blob' }
+      );
+
+      const audioBlob = new Blob([response.data], { type: 'audio/mpeg' });
+      setSynthesizedAudioUrl(URL.createObjectURL(audioBlob));
+    } catch (err: any) {
+      alert(`Synthesis failed: ${err.response?.data?.error || err.message}`);
+    } finally {
+      setIsSynthesizing(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+      {/* Header */}
+      <header className="border-b border-slate-800/80 bg-slate-900/50 backdrop-blur sticky top-0 z-40 px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-500/20">
+            <Sparkles className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-bold text-lg leading-tight tracking-tight">VocalRefine AI</h1>
+            <p className="text-[11px] text-slate-400">Jordan Peterson Rhetoric Coach & Voice Synthesizer</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {modelId ? (
+            <span className="flex items-center gap-1.5 text-xs bg-emerald-950/70 border border-emerald-800/60 text-emerald-300 px-3 py-1.5 rounded-full font-mono">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Cloned Model: {modelId.slice(0, 8)}...
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-xs bg-amber-950/70 border border-amber-800/60 text-amber-300 px-3 py-1.5 rounded-full">
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> Voice Not Calibrated
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* Main Container */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-6 space-y-8">
+        {/* Step 1 & Step 2 Audio Ingestion */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Step 1: Voice Calibration */}
+          <div className="relative">
+            <AudioRecorder
+              title="Step 1: Voice Calibration"
+              subtitle="Record a clean 30s sample to clone your acoustic signature via Fish Audio."
+              minDurationSeconds={10}
+              onAudioReady={handleCalibrationAudio}
+            />
+            {isCalibrating && (
+              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center z-10">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-2"></div>
+                <p className="text-xs font-mono text-indigo-300">Extracting Timbre & Training Model...</p>
+              </div>
+            )}
+          </div>
+
+          {/* Step 2: Speech Audit Recording */}
+          <div className="relative">
+            <AudioRecorder
+              title="Step 2: Spontaneous Speech Capture"
+              subtitle="Speak your unfiltered thoughts. Um's, pauses, and crutches will be dissected."
+              minDurationSeconds={5}
+              onAudioReady={handleSpeechAudio}
+            />
+            {isAuditing && (
+              <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center z-10">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-2"></div>
+                <p className="text-xs font-mono text-indigo-300">Auditing Vocal Cadence with Gemini 1.5 Pro...</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Audit Presentation */}
+        {auditData && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Metric Overview Cards */}
+            <MetricCards metrics={auditData.metrics} fillerBreakdown={auditData.fillerBreakdown} />
+
+            {/* Jordan Peterson Diagnostic */}
+            <PetersonAuditCard auditText={auditData.petersonAudit} />
+
+            {/* Transcript Comparison Section */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Raw Transcript Card */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <span className="text-xs font-bold uppercase tracking-wider text-rose-400">Verbatim Speech</span>
+                    {rawAudioUrl && (
+                      <audio controls src={rawAudioUrl} className="h-7 w-48 scale-90" />
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed font-mono bg-slate-950 p-4 rounded-xl border border-slate-800/80 min-h-[140px]">
+                    {auditData.rawTranscript}
+                  </p>
+                </div>
+              </div>
+
+              {/* Refined Flawless Script Card */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">Refined Master Script</span>
+                    <button
+                      onClick={() => setIsScreenplayOpen(true)}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition"
+                    >
+                      <FileText className="w-3.5 h-3.5" /> Screenplay View
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed font-mono bg-slate-950 p-4 rounded-xl border border-slate-800/80 min-h-[140px]">
+                    {auditData.refinedScript}
+                  </p>
+                </div>
+
+                {/* Synthesis Trigger */}
+                <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                  <button
+                    onClick={handleReSynthesize}
+                    disabled={!modelId || isSynthesizing}
+                    className={`py-2 px-4 rounded-xl text-xs font-bold flex items-center gap-2 transition ${
+                      !modelId
+                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                        : isSynthesizing
+                        ? 'bg-indigo-900 text-indigo-300'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30'
+                    }`}
+                  >
+                    {isSynthesizing ? (
+                      <span className="flex items-center gap-2">
+                        <div className="animate-spin rounded-full h-3 w-3 border-b border-white" /> Synthesizing...
+                      </span>
+                    ) : (
+                      <>
+                        <Volume2 className="w-4 h-4" /> Re-Synthesize in Cloned Voice
+                      </>
+                    )}
+                  </button>
+
+                  {synthesizedAudioUrl && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-emerald-400 font-bold tracking-wider uppercase">Ready:</span>
+                      <audio controls autoPlay src={synthesizedAudioUrl} className="h-7 w-48 scale-90" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Screenplay Adaptation Modal */}
+        {auditData && (
+          <ScreenplayModal
+            isOpen={isScreenplayOpen}
+            onClose={() => setIsScreenplayOpen(false)}
+            screenplayText={auditData.screenplayVersion}
+          />
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
+3. Verification & Execution Steps
+1. Configure Backend
+In the backend folder, create .env using .env.example:
+code
+Bash
+PORT=5000
+FISH_AUDIO_API_KEY="your-fish-audio-key"
+GEMINI_API_KEY="your-gemini-api-key"
+Ensure ffmpeg is installed on your OS (brew install ffmpeg on macOS, sudo apt install ffmpeg on Linux, or via winget on Windows).
+Install dependencies and start the API:
+code
+Bash
+cd backend
+npm install
+npm run dev
+2. Configure Frontend
+In the frontend folder, install packages and start the Vite dev server:
+code
+Bash
+cd frontend
+npm install
+npm run dev
+Navigate to http://localhost:5173. Record your voice in Step 1 to train the Fish Audio voice clone[2].
+Speak naturally into Step 2 with conversational fillers ("um, like, basically"). Watch Gemini calculate metrics, formulate the unapologetic Peterson audit, and generate the refined script.
+Click "Re-Synthesize in Cloned Voice" to listen to the new voice output side-by-side with your raw recording[1][2].

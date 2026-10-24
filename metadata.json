@@ -1,0 +1,6 @@
+{
+  "name": "VocalRefine AI",
+  "description": "Analyze communication flaws, verbal crutches, and pacing with Jordan Peterson-style rhetorical coaching and flawless voice re-synthesis.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
